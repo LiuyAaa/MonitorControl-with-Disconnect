@@ -6,3 +6,9 @@ Carthage
 
 ### Xcode ###
 xcuserdata/
+
+### Build artifacts ###
+build/
+
+### Tool metadata ###
+.superpowers/
