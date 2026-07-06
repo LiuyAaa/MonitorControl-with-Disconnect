@@ -494,6 +494,91 @@ class DisplayManager {
     return true
   }
 
+  // 通过 m1ddc 把指定显示器"切到无信号输入源"= 软件离线
+  // 流程:先跑 `m1ddc display list` 拿到所有显示器编号+名字,按名字匹配出本显示器在 m1ddc 里的编号,再发 `m1ddc display <N> set input`。
+  // 用户机器上必须已安装 m1ddc (brew install m1ddc)。失败返回 false。
+  static func disconnect(displayID: CGDirectDisplayID) -> Bool {
+    guard displayID != kCGNullDirectDisplay,
+          CGDisplayIsBuiltin(displayID) == 0 else {
+      os_log("Refusing to disconnect built-in or null display %{public}@", type: .error, String(displayID))
+      return false
+    }
+    // 1) 拿到要断开的显示器在 macOS 视角的名字
+    let targetName = DisplayManager.getDisplayNameByID(displayID: displayID)
+    if targetName.isEmpty {
+      os_log("Disconnect: cannot resolve name for display %{public}@", type: .error, String(displayID))
+      return false
+    }
+    // 2) 跑 m1ddc display list,解析出名字 → m1ddc 编号 的映射
+    guard let listOutput = runM1DDC(args: ["display", "list"]) else {
+      os_log("Disconnect: m1ddc not available (display list failed)", type: .error)
+      return false
+    }
+    guard let m1ddcID = parseM1DDCDisplayList(output: listOutput, matchingName: targetName) else {
+      os_log("Disconnect: no m1ddc display matches '%{public}@'", type: .error, targetName)
+      return false
+    }
+    // 3) 切输入源 —— 没有 get input,只能逐个试常见输入码(m1ddc set input 需要 n):
+    //    DisplayPort 1: 15, DisplayPort 2: 16, HDMI 1: 17, HDMI 2: 18, USB-C: 27
+    //    第一个退出码为 0 的就是显示器接受的输入;只要不是当前活跃输入,信号就没了 = macOS 离线该显示器。
+    let candidates = [15, 16, 17, 18, 27]
+    for value in candidates {
+      if runM1DDC(args: ["display", String(m1ddcID), "set", "input", String(value)]) != nil {
+        os_log("Disconnect: switched display %{public}@ (m1ddc %{public}@) to input %{public}@", type: .info, String(displayID), String(m1ddcID), String(value))
+        return true
+      }
+    }
+    os_log("Disconnect: no m1ddc input value accepted by display %{public}@ (m1ddc %{public}@)", type: .error, String(displayID), String(m1ddcID))
+    return false
+  }
+
+  // MARK: - m1ddc helpers
+
+  // 跑一次 m1ddc 子进程,返回 stdout(失败返回 nil)
+  private static func runM1DDC(args: [String]) -> String? {
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/m1ddc")
+    proc.arguments = args
+    let pipe = Pipe()
+    proc.standardOutput = pipe
+    proc.standardError = pipe
+    do {
+      try proc.run()
+    } catch {
+      os_log("m1ddc launch failed: %{public}@", type: .error, error.localizedDescription)
+      return nil
+    }
+    proc.waitUntilExit()
+    guard proc.terminationStatus == 0 else {
+      return nil
+    }
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    return String(data: data, encoding: .utf8)
+  }
+
+  // 解析 `m1ddc display list` 输出,按显示器名字找 m1ddc 编号。格式示例:
+  //   [1] (null) (37D8832A-...)
+  //   [2] QSN-CBB (0D895FC7-...)
+  // 名字可能为 "(null)" 或真的显示器名,按 targetName 精确匹配括号里的第一段。
+  private static func parseM1DDCDisplayList(output: String, matchingName targetName: String) -> Int? {
+    let normalizedTarget = targetName.trimmingCharacters(in: .whitespacesAndNewlines)
+    for rawLine in output.split(separator: "\n") {
+      let line = rawLine.trimmingCharacters(in: .whitespaces)
+      // 形如: [N] Name (...)
+      guard line.hasPrefix("["),
+            let bracketEnd = line.firstIndex(of: "]"),
+            bracketEnd > line.index(after: line.startIndex) else { continue }
+      let idStr = String(line[line.index(after: line.startIndex)..<bracketEnd])
+      guard let n = Int(idStr) else { continue }
+      let rest = String(line[line.index(after: bracketEnd)...]).trimmingCharacters(in: .whitespaces)
+      // rest 形如 "Name (...)" 或 "(null) (...)"
+      if rest.hasPrefix("(\(normalizedTarget))") || rest.hasPrefix("\(normalizedTarget)") {
+        return n
+      }
+    }
+    return nil
+  }
+
   static func resolveEffectiveDisplayID(_ displayID: CGDirectDisplayID) -> CGDirectDisplayID {
     var realDisplayID = displayID
     if CGDisplayIsInHWMirrorSet(displayID) != 0 || CGDisplayIsInMirrorSet(displayID) != 0 {

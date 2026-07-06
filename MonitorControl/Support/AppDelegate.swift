@@ -76,6 +76,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
+  @objc func disconnectDisplayClicked(_ sender: NSMenuItem) {
+    guard let number = sender.representedObject as? NSNumber else { return }
+    menu.closeMenu()
+    let ok = DisplayManager.disconnect(displayID: number.uint32Value)
+    if !ok {
+      let alert = NSAlert()
+      alert.messageText = "断开失败"
+      alert.informativeText = "请确认已安装 m1ddc (brew install m1ddc),并确认此显示器名字能被 m1ddc display list 列出。"
+      alert.addButton(withTitle: "好")
+      alert.runModal()
+    }
+  }
+
   @objc func prefsClicked(_: AnyObject) {
     os_log("Settings clicked", type: .info)
     self.settingsWindowController.show()

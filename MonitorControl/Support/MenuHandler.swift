@@ -200,6 +200,20 @@ class MenuHandler: NSMenu, NSMenuDelegate {
     if addedSliderHandlers.count > 0, prefs.integer(forKey: PrefKey.menuIcon.rawValue) == MenuIcon.sliderOnly.rawValue {
       app.updateStatusItemVisibility(true)
     }
+    self.addDisconnectMenuItem(display: display, monitorSubMenu: monitorSubMenu)
+  }
+
+  func addDisconnectMenuItem(display: Display, monitorSubMenu: NSMenu) {
+    guard !display.isDummy,
+          CGDisplayIsBuiltin(display.identifier) == 0 else { return }
+    let item = NSMenuItem(
+      title: NSLocalizedString("断开连接", comment: "通过 m1ddc 软件断开此显示器"),
+      action: #selector(app.disconnectDisplayClicked(_:)),
+      keyEquivalent: ""
+    )
+    // 用 representedObject 传显示器 ID;target = nil 时 NSMenu 沿 responder chain 找到 app
+    item.representedObject = NSNumber(value: display.identifier)
+    monitorSubMenu.addItem(item)
   }
 
   private func appendMenuHeader(friendlyName: String, monitorSubMenu: NSMenu, asSubMenu: Bool, numOfDisplays: Int) {
