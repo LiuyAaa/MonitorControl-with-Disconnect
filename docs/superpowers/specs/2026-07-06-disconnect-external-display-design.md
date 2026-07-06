@@ -39,21 +39,30 @@ static func disconnect(displayID: CGDirectDisplayID) -> Bool {
     os_log("Refusing to disconnect built-in or null display %{public}@", type: .error, String(displayID))
     return false
   }
+  // 1. 不允许断开作为 mirror source 的显示器(否则会导致 mirror 链路破损)
+  //    与 mirror 主镜像允许 —— 用户体感就是丢掉那个 mirror secondary
+  if CGDisplayIsInHWMirrorSet(displayID) != 0 || CGDisplayIsInMirrorSet(displayID) != 0,
+     CGDisplayMirrorsDisplay(displayID) == kCGNullDirectDisplay {
+    os_log("Refusing to disconnect mirror source %{public}@", type: .error, String(displayID))
+    return false
+  }
 
   var configRef: CGDisplayConfigRef?
   guard CGBeginDisplayConfiguration(&configRef) == .success else {
     os_log("CGBeginDisplayConfiguration failed for %{public}@", type: .error, String(displayID))
     return false
   }
-  // 1. 在交易里把指定显示器关掉
-  let result = CGConfigureDisplayEnabled(configRef, displayID, false)
-  // 2. 提交
-  let commit = CGCompleteDisplayConfiguration(configRef, CGConfigureOption.permanently)
-  if result != .success || commit != .success {
+  // 2. 在交易里把指定显示器关掉
+  let configureResult = CGConfigureDisplayEnabled(configRef, displayID, false)
+  // 3. 提交 (CGComplete 自带回滚——失败时它自己会回退整个 config)
+  let commitResult = CGCompleteDisplayConfiguration(configRef, CGConfigureOption.permanently)
+
+  if configureResult != .success || commitResult != .success {
     os_log("CGConfigureDisplayEnabled/complete failed for %{public}@ (cfg=%{public}@ commit=%{public}@)",
-           type: .error, String(displayID), String(result.rawValue), String(commit.rawValue))
-    // 尽力回滚
-    CGCancelDisplayConfiguration(configRef)
+           type: .error,
+           String(displayID),
+           String(configureResult.rawValue),
+           String(commitResult.rawValue))
     return false
   }
   os_log("Disconnected display %{public}@", type: .info, String(displayID))
@@ -78,9 +87,8 @@ func addDisconnectMenuItem(display: Display, monitorSubMenu: NSMenu) {
     action: #selector(app.disconnectDisplayClicked(_:)),
     keyEquivalent: ""
   )
-  // 把显示器 ID 通过 representedObject 传给 handler
+  // 把显示器 ID 通过 representedObject 传给 handler (NSMenuItem 默认 target 为 nil,沿 responder chain 找到 app)
   item.representedObject = NSNumber(value: display.identifier)
-  item.target = nil  // 由 action 的具体 selector 在 app 上解析
   monitorSubMenu.addItem(item)
 }
 ```
